@@ -3,9 +3,9 @@ import discord
 from discord.ext import commands
 from supabase import create_client
 
-# =========================
-# Crownlands settings
-# =========================
+# =========================================================
+# CROWNLANDS SETTINGS
+# =========================================================
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -23,9 +23,10 @@ bot = commands.Bot(
     help_command=None
 )
 
-# =========================
-# Database helpers
-# =========================
+
+# =========================================================
+# DATABASE HELPERS
+# =========================================================
 
 def get_player(discord_id):
     result = (
@@ -49,24 +50,58 @@ def update_player(discord_id, changes):
         .execute()
     )
 
-# =========================
-# Ready
-# =========================
+
+def get_buildings(discord_id):
+    result = (
+        supabase.table("buildings")
+        .select("*")
+        .eq("discord_id", str(discord_id))
+        .order("id")
+        .execute()
+    )
+
+    return result.data or []
+
+
+def sync_building_count(discord_id):
+    buildings = get_buildings(discord_id)
+    count = len(buildings)
+
+    update_player(
+        discord_id,
+        {
+            "buildings": count
+        }
+    )
+
+    return count
+
+
+# =========================================================
+# BOT READY
+# =========================================================
 
 @bot.event
 async def on_ready():
     print(f"Crownlands is online as {bot.user}")
 
-# =========================
-# Start
-# =========================
+
+# =========================================================
+# START ACCOUNT
+# =========================================================
 
 @bot.command()
 async def start(ctx):
     try:
-        player = get_player(ctx.author.id)
+        discord_id = str(ctx.author.id)
+
+        player = get_player(discord_id)
 
         if player:
+            building_count = sync_building_count(discord_id)
+
+            player = get_player(discord_id)
+
             await ctx.send(
                 "🏰 **You already have a Crownlands account.**\n\n"
                 f"👑 Crowns: {player['crowns']}\n"
@@ -74,12 +109,12 @@ async def start(ctx):
                 f"🪵 Timber: {player['timber']}\n"
                 f"🏖️ Sand: {player['sand']}\n"
                 f"🧱 Brick: {player['brick']}\n"
-                f"🏭 Buildings: {player['buildings']}"
+                f"🏭 Buildings: {building_count}"
             )
             return
 
         new_player = {
-            "discord_id": str(ctx.author.id),
+            "discord_id": discord_id,
             "player_name": ctx.author.display_name,
             "crowns": 250,
             "parcels": 1,
@@ -103,11 +138,14 @@ async def start(ctx):
 
     except Exception as error:
         print("START ERROR:", error)
-        await ctx.send("❌ Crownlands had a database problem.")
+        await ctx.send(
+            "❌ Crownlands had a database problem while creating your account."
+        )
 
-# =========================
-# Profile
-# =========================
+
+# =========================================================
+# PROFILE
+# =========================================================
 
 @bot.command()
 async def profile(ctx):
@@ -115,8 +153,15 @@ async def profile(ctx):
         player = get_player(ctx.author.id)
 
         if not player:
-            await ctx.send("You don't have an account yet. Type **!start** first.")
+            await ctx.send(
+                "You don't have a Crownlands account yet.\n"
+                "Type **!start** first."
+            )
             return
+
+        building_count = sync_building_count(ctx.author.id)
+
+        player = get_player(ctx.author.id)
 
         await ctx.send(
             f"🏰 **Crownlands Profile — {player['player_name']}**\n\n"
@@ -125,16 +170,19 @@ async def profile(ctx):
             f"🪵 Timber: {player['timber']}\n"
             f"🏖️ Sand: {player['sand']}\n"
             f"🧱 Brick: {player['brick']}\n"
-            f"🏭 Buildings: {player['buildings']}"
+            f"🏭 Buildings: {building_count}"
         )
 
     except Exception as error:
         print("PROFILE ERROR:", error)
-        await ctx.send("❌ I couldn't read your account.")
+        await ctx.send(
+            "❌ I couldn't read your Crownlands account."
+        )
 
-# =========================
-# Land
-# =========================
+
+# =========================================================
+# LAND
+# =========================================================
 
 @bot.command()
 async def land(ctx):
@@ -145,22 +193,88 @@ async def land(ctx):
             await ctx.send("Type **!start** first.")
             return
 
-        empty_parcels = player["parcels"] - player["buildings"]
+        buildings = get_buildings(ctx.author.id)
+
+        developed_parcels = len(buildings)
+        empty_parcels = player["parcels"] - developed_parcels
+
+        if empty_parcels < 0:
+            empty_parcels = 0
 
         await ctx.send(
             "🗺️ **Your Crownlands Land**\n\n"
             f"Total parcels: {player['parcels']}\n"
-            f"Developed parcels: {player['buildings']}\n"
+            f"Developed parcels: {developed_parcels}\n"
             f"Empty parcels: {empty_parcels}"
         )
 
     except Exception as error:
         print("LAND ERROR:", error)
-        await ctx.send("❌ I couldn't read your land.")
+        await ctx.send(
+            "❌ I couldn't read your Crownlands land."
+        )
 
-# =========================
-# Build
-# =========================
+
+# =========================================================
+# BUILDINGS LIST
+# =========================================================
+
+@bot.command()
+async def buildings(ctx):
+    try:
+        player = get_player(ctx.author.id)
+
+        if not player:
+            await ctx.send("Type **!start** first.")
+            return
+
+        owned_buildings = get_buildings(ctx.author.id)
+
+        if not owned_buildings:
+            await ctx.send(
+                "🏭 **Your Buildings**\n\n"
+                "You don't own any buildings yet."
+            )
+            return
+
+        lines = []
+
+        for number, building in enumerate(owned_buildings, start=1):
+
+            building_type = building["building_type"]
+            level = building["level"]
+
+            if building_type == "timberyard":
+                name = "🪵 Timber Yard"
+
+            elif building_type == "quarry":
+                name = "⛏️ Quarry"
+
+            else:
+                name = f"🏭 {building_type.title()}"
+
+            lines.append(
+                f"{number}. {name} — Level {level}"
+            )
+
+        message = (
+            "🏭 **Your Crownlands Buildings**\n\n"
+            + "\n".join(lines)
+            + f"\n\nTotal buildings: {len(owned_buildings)}"
+        )
+
+        await ctx.send(message)
+
+    except Exception as error:
+        print("BUILDINGS ERROR:", error)
+        await ctx.send(
+            "❌ I couldn't read your buildings."
+        )
+
+
+# =========================================================
+# BUILD COMMAND
+# =========================================================
 
 @bot.command()
 async def build(ctx, building_name=None):
@@ -173,7 +287,7 @@ async def build(ctx, building_name=None):
 
         if building_name is None:
             await ctx.send(
-                "🏗️ **Available buildings**\n\n"
+                "🏗️ **Available Buildings**\n\n"
                 "🪵 `!build timberyard`\n"
                 "Cost: 50 Crowns + 25 Timber + 5 Brick\n\n"
                 "⛏️ `!build quarry`\n"
@@ -183,15 +297,25 @@ async def build(ctx, building_name=None):
 
         building_name = building_name.lower()
 
-        empty_parcels = player["parcels"] - player["buildings"]
+        owned_buildings = get_buildings(ctx.author.id)
+
+        developed_parcels = len(owned_buildings)
+        empty_parcels = player["parcels"] - developed_parcels
 
         if empty_parcels <= 0:
             await ctx.send(
-                "❌ You have no empty parcels available."
+                "❌ You have no empty parcels available.\n\n"
+                "You need more land before you can build again."
             )
             return
 
+
+        # =================================================
+        # TIMBER YARD
+        # =================================================
+
         if building_name == "timberyard":
+
             crown_cost = 50
             timber_cost = 25
             brick_cost = 5
@@ -202,7 +326,7 @@ async def build(ctx, building_name=None):
                 or player["brick"] < brick_cost
             ):
                 await ctx.send(
-                    "❌ You cannot afford a Timber Yard.\n\n"
+                    "❌ You cannot afford a **Timber Yard**.\n\n"
                     "Cost:\n"
                     "👑 50 Crowns\n"
                     "🪵 25 Timber\n"
@@ -210,15 +334,41 @@ async def build(ctx, building_name=None):
                 )
                 return
 
-            update_player(
-                ctx.author.id,
-                {
-                    "crowns": player["crowns"] - crown_cost,
-                    "timber": player["timber"] - timber_cost,
-                    "brick": player["brick"] - brick_cost,
-                    "buildings": player["buildings"] + 1
-                }
+            new_building = {
+                "discord_id": str(ctx.author.id),
+                "building_type": "timberyard",
+                "level": 1
+            }
+
+            insert_result = (
+                supabase.table("buildings")
+                .insert(new_building)
+                .execute()
             )
+
+            try:
+                update_player(
+                    ctx.author.id,
+                    {
+                        "crowns": player["crowns"] - crown_cost,
+                        "timber": player["timber"] - timber_cost,
+                        "brick": player["brick"] - brick_cost,
+                        "buildings": developed_parcels + 1
+                    }
+                )
+
+            except Exception:
+                if insert_result.data:
+                    new_id = insert_result.data[0]["id"]
+
+                    (
+                        supabase.table("buildings")
+                        .delete()
+                        .eq("id", new_id)
+                        .execute()
+                    )
+
+                raise
 
             await ctx.send(
                 "🪵 **Timber Yard built!**\n\n"
@@ -226,10 +376,17 @@ async def build(ctx, building_name=None):
                 "Cost:\n"
                 "👑 50 Crowns\n"
                 "🪵 25 Timber\n"
-                "🧱 5 Brick"
+                "🧱 5 Brick\n\n"
+                "The Timber Yard is now permanently recorded."
             )
 
+
+        # =================================================
+        # QUARRY
+        # =================================================
+
         elif building_name == "quarry":
+
             crown_cost = 60
             timber_cost = 20
             brick_cost = 5
@@ -240,7 +397,7 @@ async def build(ctx, building_name=None):
                 or player["brick"] < brick_cost
             ):
                 await ctx.send(
-                    "❌ You cannot afford a Quarry.\n\n"
+                    "❌ You cannot afford a **Quarry**.\n\n"
                     "Cost:\n"
                     "👑 60 Crowns\n"
                     "🪵 20 Timber\n"
@@ -248,15 +405,41 @@ async def build(ctx, building_name=None):
                 )
                 return
 
-            update_player(
-                ctx.author.id,
-                {
-                    "crowns": player["crowns"] - crown_cost,
-                    "timber": player["timber"] - timber_cost,
-                    "brick": player["brick"] - brick_cost,
-                    "buildings": player["buildings"] + 1
-                }
+            new_building = {
+                "discord_id": str(ctx.author.id),
+                "building_type": "quarry",
+                "level": 1
+            }
+
+            insert_result = (
+                supabase.table("buildings")
+                .insert(new_building)
+                .execute()
             )
+
+            try:
+                update_player(
+                    ctx.author.id,
+                    {
+                        "crowns": player["crowns"] - crown_cost,
+                        "timber": player["timber"] - timber_cost,
+                        "brick": player["brick"] - brick_cost,
+                        "buildings": developed_parcels + 1
+                    }
+                )
+
+            except Exception:
+                if insert_result.data:
+                    new_id = insert_result.data[0]["id"]
+
+                    (
+                        supabase.table("buildings")
+                        .delete()
+                        .eq("id", new_id)
+                        .execute()
+                    )
+
+                raise
 
             await ctx.send(
                 "⛏️ **Quarry built!**\n\n"
@@ -264,40 +447,53 @@ async def build(ctx, building_name=None):
                 "Cost:\n"
                 "👑 60 Crowns\n"
                 "🪵 20 Timber\n"
-                "🧱 5 Brick"
+                "🧱 5 Brick\n\n"
+                "The Quarry is now permanently recorded."
             )
+
+
+        # =================================================
+        # UNKNOWN BUILDING
+        # =================================================
 
         else:
             await ctx.send(
-                "❌ Unknown building.\n\n"
-                "Try:\n"
+                "❌ I don't recognise that building.\n\n"
+                "Available buildings:\n"
                 "`!build timberyard`\n"
                 "`!build quarry`"
             )
 
     except Exception as error:
         print("BUILD ERROR:", error)
-        await ctx.send("❌ Something went wrong while building.")
 
-# =========================
-# Help
-# =========================
+        await ctx.send(
+            "❌ Something went wrong while trying to build.\n"
+            "Your existing account has not been deliberately reset."
+        )
+
+
+# =========================================================
+# HELP
+# =========================================================
 
 @bot.command(name="help", aliases=["helpme"])
 async def crownlands_help(ctx):
     await ctx.send(
         "🏰 **CROWNLANDS COMMANDS**\n\n"
-        "`!start` — create your account\n"
-        "`!profile` — show your resources\n"
-        "`!land` — show your land\n"
-        "`!build` — show available buildings\n"
-        "`!build timberyard` — build a Timber Yard\n"
-        "`!build quarry` — build a Quarry\n"
-        "`!help` — show this list"
+        "👤 `!start` — create your account\n"
+        "📋 `!profile` — show your resources\n"
+        "🗺️ `!land` — show your parcels\n"
+        "🏭 `!buildings` — show buildings you own\n"
+        "🏗️ `!build` — show available buildings\n"
+        "🪵 `!build timberyard` — build a Timber Yard\n"
+        "⛏️ `!build quarry` — build a Quarry\n"
+        "❓ `!help` — show this command list"
     )
 
-# =========================
-# Start bot
-# =========================
+
+# =========================================================
+# START CROWNLANDS
+# =========================================================
 
 bot.run(TOKEN)
