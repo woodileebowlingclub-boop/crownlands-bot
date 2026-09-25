@@ -1,7 +1,10 @@
 import os
+from datetime import datetime, timezone
+
 import discord
 from discord.ext import commands
 from supabase import create_client
+
 
 # =========================================================
 # CROWNLANDS SETTINGS
@@ -22,6 +25,11 @@ bot = commands.Bot(
     intents=intents,
     help_command=None
 )
+
+PRODUCTION_CYCLE_SECONDS = 300  # 5 minutes
+
+TIMBER_PER_CYCLE = 10
+SAND_PER_CYCLE = 8
 
 
 # =========================================================
@@ -77,6 +85,87 @@ def sync_building_count(discord_id):
     return count
 
 
+def parse_supabase_time(value):
+    if not value:
+        return datetime.now(timezone.utc)
+
+    text = str(value)
+
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+
+    return datetime.fromisoformat(text)
+
+
+def production_summary(discord_id):
+    player = get_player(discord_id)
+
+    if not player:
+        return None
+
+    buildings = get_buildings(discord_id)
+
+    timber_yards = sum(
+        1 for building in buildings
+        if building["building_type"] == "timberyard"
+    )
+
+    quarries = sum(
+        1 for building in buildings
+        if building["building_type"] == "quarry"
+    )
+
+    last_collected = parse_supabase_time(
+        player.get("last_collected")
+    )
+
+    now = datetime.now(timezone.utc)
+
+    elapsed_seconds = max(
+        0,
+        int((now - last_collected).total_seconds())
+    )
+
+    cycles = elapsed_seconds // PRODUCTION_CYCLE_SECONDS
+
+    timber_generated = (
+        cycles
+        * timber_yards
+        * TIMBER_PER_CYCLE
+    )
+
+    sand_generated = (
+        cycles
+        * quarries
+        * SAND_PER_CYCLE
+    )
+
+    seconds_into_cycle = (
+        elapsed_seconds
+        % PRODUCTION_CYCLE_SECONDS
+    )
+
+    seconds_until_next_cycle = (
+        PRODUCTION_CYCLE_SECONDS
+        - seconds_into_cycle
+    )
+
+    if cycles == 0 and elapsed_seconds == 0:
+        seconds_until_next_cycle = PRODUCTION_CYCLE_SECONDS
+
+    return {
+        "player": player,
+        "buildings": buildings,
+        "timber_yards": timber_yards,
+        "quarries": quarries,
+        "cycles": cycles,
+        "timber_generated": timber_generated,
+        "sand_generated": sand_generated,
+        "seconds_until_next_cycle": seconds_until_next_cycle,
+        "now": now
+    }
+
+
 # =========================================================
 # BOT READY
 # =========================================================
@@ -113,6 +202,8 @@ async def start(ctx):
             )
             return
 
+        now = datetime.now(timezone.utc).isoformat()
+
         new_player = {
             "discord_id": discord_id,
             "player_name": ctx.author.display_name,
@@ -121,7 +212,8 @@ async def start(ctx):
             "timber": 100,
             "sand": 100,
             "brick": 25,
-            "buildings": 0
+            "buildings": 0,
+            "last_collected": now
         }
 
         supabase.table("players").insert(new_player).execute()
@@ -138,6 +230,7 @@ async def start(ctx):
 
     except Exception as error:
         print("START ERROR:", error)
+
         await ctx.send(
             "❌ Crownlands had a database problem while creating your account."
         )
@@ -175,6 +268,7 @@ async def profile(ctx):
 
     except Exception as error:
         print("PROFILE ERROR:", error)
+
         await ctx.send(
             "❌ I couldn't read your Crownlands account."
         )
@@ -210,6 +304,7 @@ async def land(ctx):
 
     except Exception as error:
         print("LAND ERROR:", error)
+
         await ctx.send(
             "❌ I couldn't read your Crownlands land."
         )
@@ -239,8 +334,10 @@ async def buildings(ctx):
 
         lines = []
 
-        for number, building in enumerate(owned_buildings, start=1):
-
+        for number, building in enumerate(
+            owned_buildings,
+            start=1
+        ):
             building_type = building["building_type"]
             level = building["level"]
 
@@ -267,8 +364,119 @@ async def buildings(ctx):
 
     except Exception as error:
         print("BUILDINGS ERROR:", error)
+
         await ctx.send(
             "❌ I couldn't read your buildings."
+        )
+
+
+# =========================================================
+# PRODUCTION STATUS
+# =========================================================
+
+@bot.command()
+async def production(ctx):
+    try:
+        summary = production_summary(ctx.author.id)
+
+        if not summary:
+            await ctx.send("Type **!start** first.")
+            return
+
+        timber_yards = summary["timber_yards"]
+        quarries = summary["quarries"]
+        cycles = summary["cycles"]
+        timber_generated = summary["timber_generated"]
+        sand_generated = summary["sand_generated"]
+        seconds_left = summary["seconds_until_next_cycle"]
+
+        minutes_left = seconds_left // 60
+        seconds_remainder = seconds_left % 60
+
+        await ctx.send(
+            "🏭 **Crownlands Production**\n\n"
+            f"🪵 Timber Yards: {timber_yards}\n"
+            f"⛏️ Quarries: {quarries}\n\n"
+            f"⏱️ Completed 5-minute cycles waiting: {cycles}\n\n"
+            f"Ready to collect:\n"
+            f"🪵 Timber: {timber_generated}\n"
+            f"🏖️ Sand: {sand_generated}\n\n"
+            f"Next cycle in about "
+            f"{minutes_left}m {seconds_remainder}s\n\n"
+            "Use `!collect` to collect production."
+        )
+
+    except Exception as error:
+        print("PRODUCTION ERROR:", error)
+
+        await ctx.send(
+            "❌ I couldn't calculate your production."
+        )
+
+
+# =========================================================
+# COLLECT PRODUCTION
+# =========================================================
+
+@bot.command()
+async def collect(ctx):
+    try:
+        summary = production_summary(ctx.author.id)
+
+        if not summary:
+            await ctx.send("Type **!start** first.")
+            return
+
+        player = summary["player"]
+        cycles = summary["cycles"]
+        timber_generated = summary["timber_generated"]
+        sand_generated = summary["sand_generated"]
+        timber_yards = summary["timber_yards"]
+        quarries = summary["quarries"]
+
+        if timber_yards == 0 and quarries == 0:
+            await ctx.send(
+                "❌ You don't own any production buildings yet."
+            )
+            return
+
+        if cycles <= 0:
+            await ctx.send(
+                "⏳ Nothing is ready yet.\n\n"
+                "Production works in 5-minute cycles.\n"
+                "Try `!production` to see the timer."
+            )
+            return
+
+        new_timber = player["timber"] + timber_generated
+        new_sand = player["sand"] + sand_generated
+
+        now = datetime.now(timezone.utc).isoformat()
+
+        update_player(
+            ctx.author.id,
+            {
+                "timber": new_timber,
+                "sand": new_sand,
+                "last_collected": now
+            }
+        )
+
+        await ctx.send(
+            "📦 **Production collected!**\n\n"
+            f"Completed cycles: {cycles}\n\n"
+            f"🪵 Timber collected: {timber_generated}\n"
+            f"🏖️ Sand collected: {sand_generated}\n\n"
+            f"New totals:\n"
+            f"🪵 Timber: {new_timber}\n"
+            f"🏖️ Sand: {new_sand}"
+        )
+
+    except Exception as error:
+        print("COLLECT ERROR:", error)
+
+        await ctx.send(
+            "❌ Something went wrong while collecting production."
         )
 
 
@@ -289,9 +497,11 @@ async def build(ctx, building_name=None):
             await ctx.send(
                 "🏗️ **Available Buildings**\n\n"
                 "🪵 `!build timberyard`\n"
-                "Cost: 50 Crowns + 25 Timber + 5 Brick\n\n"
+                "Cost: 50 Crowns + 25 Timber + 5 Brick\n"
+                "Produces: 10 Timber every 5 minutes\n\n"
                 "⛏️ `!build quarry`\n"
-                "Cost: 60 Crowns + 20 Timber + 5 Brick"
+                "Cost: 60 Crowns + 20 Timber + 5 Brick\n"
+                "Produces: 8 Sand every 5 minutes"
             )
             return
 
@@ -377,7 +587,8 @@ async def build(ctx, building_name=None):
                 "👑 50 Crowns\n"
                 "🪵 25 Timber\n"
                 "🧱 5 Brick\n\n"
-                "The Timber Yard is now permanently recorded."
+                "Production:\n"
+                "🪵 10 Timber every 5 minutes"
             )
 
 
@@ -448,7 +659,8 @@ async def build(ctx, building_name=None):
                 "👑 60 Crowns\n"
                 "🪵 20 Timber\n"
                 "🧱 5 Brick\n\n"
-                "The Quarry is now permanently recorded."
+                "Production:\n"
+                "🏖️ 8 Sand every 5 minutes"
             )
 
 
@@ -468,8 +680,7 @@ async def build(ctx, building_name=None):
         print("BUILD ERROR:", error)
 
         await ctx.send(
-            "❌ Something went wrong while trying to build.\n"
-            "Your existing account has not been deliberately reset."
+            "❌ Something went wrong while trying to build."
         )
 
 
@@ -488,6 +699,8 @@ async def crownlands_help(ctx):
         "🏗️ `!build` — show available buildings\n"
         "🪵 `!build timberyard` — build a Timber Yard\n"
         "⛏️ `!build quarry` — build a Quarry\n"
+        "⚙️ `!production` — check production waiting\n"
+        "📦 `!collect` — collect produced resources\n"
         "❓ `!help` — show this command list"
     )
 
