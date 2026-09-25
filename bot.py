@@ -35,6 +35,15 @@ def get_player(discord_id):
     return None
 
 
+def update_player(discord_id, changes):
+    (
+        supabase.table("players")
+        .update(changes)
+        .eq("discord_id", str(discord_id))
+        .execute()
+    )
+
+
 @bot.command()
 async def start(ctx):
     discord_id = str(ctx.author.id)
@@ -115,12 +124,115 @@ async def land(ctx):
 
 
 @bot.command()
+async def build(ctx, building_name: str = None):
+    player = get_player(ctx.author.id)
+
+    if not player:
+        await ctx.send("Type **!start** first.")
+        return
+
+    if not building_name:
+        await ctx.send(
+            "🏗️ Choose a building:\n\n"
+            "`!build timberyard`\n"
+            "`!build quarry`"
+        )
+        return
+
+    building_name = building_name.lower()
+
+    free_parcels = player["parcels"] - player["buildings"]
+
+    if free_parcels <= 0:
+        await ctx.send("❌ You have no empty parcels available.")
+        return
+
+    if building_name == "timberyard":
+        cost_crowns = 50
+        cost_timber = 25
+        cost_brick = 5
+
+        if (
+            player["crowns"] < cost_crowns
+            or player["timber"] < cost_timber
+            or player["brick"] < cost_brick
+        ):
+            await ctx.send(
+                "❌ You cannot afford a Timber Yard.\n\n"
+                "Cost: 50 Crowns, 25 Timber, 5 Brick"
+            )
+            return
+
+        update_player(
+            ctx.author.id,
+            {
+                "crowns": player["crowns"] - cost_crowns,
+                "timber": player["timber"] - cost_timber,
+                "brick": player["brick"] - cost_brick,
+                "buildings": player["buildings"] + 1
+            }
+        )
+
+        await ctx.send(
+            "🪵 **Timber Yard built!**\n\n"
+            "Cost:\n"
+            "👑 50 Crowns\n"
+            "🪵 25 Timber\n"
+            "🧱 5 Brick"
+        )
+
+    elif building_name == "quarry":
+        cost_crowns = 60
+        cost_timber = 20
+        cost_brick = 5
+
+        if (
+            player["crowns"] < cost_crowns
+            or player["timber"] < cost_timber
+            or player["brick"] < cost_brick
+        ):
+            await ctx.send(
+                "❌ You cannot afford a Quarry.\n\n"
+                "Cost: 60 Crowns, 20 Timber, 5 Brick"
+            )
+            return
+
+        update_player(
+            ctx.author.id,
+            {
+                "crowns": player["crowns"] - cost_crowns,
+                "timber": player["timber"] - cost_timber,
+                "brick": player["brick"] - cost_brick,
+                "buildings": player["buildings"] + 1
+            }
+        )
+
+        await ctx.send(
+            "⛏️ **Quarry built!**\n\n"
+            "Cost:\n"
+            "👑 60 Crowns\n"
+            "🪵 20 Timber\n"
+            "🧱 5 Brick"
+        )
+
+    else:
+        await ctx.send(
+            "❌ Unknown building.\n\n"
+            "Try:\n"
+            "`!build timberyard`\n"
+            "`!build quarry`"
+        )
+
+
+@bot.command()
 async def helpme(ctx):
     await ctx.send(
         "🏰 **Crownlands Commands**\n\n"
         "`!start` — create your account\n"
         "`!profile` — view your resources\n"
         "`!land` — view your parcels\n"
+        "`!build timberyard` — build a Timber Yard\n"
+        "`!build quarry` — build a Quarry\n"
         "`!helpme` — show commands"
     )
 
