@@ -23,9 +23,8 @@ bot = commands.Bot(
     help_command=None
 )
 
-
 # =========================
-# Database functions
+# Database helpers
 # =========================
 
 def get_player(discord_id):
@@ -50,26 +49,22 @@ def update_player(discord_id, changes):
         .execute()
     )
 
-
 # =========================
-# Bot startup
+# Ready
 # =========================
 
 @bot.event
 async def on_ready():
     print(f"Crownlands is online as {bot.user}")
 
-
 # =========================
-# START
+# Start
 # =========================
 
 @bot.command()
 async def start(ctx):
     try:
-        discord_id = str(ctx.author.id)
-
-        player = get_player(discord_id)
+        player = get_player(ctx.author.id)
 
         if player:
             await ctx.send(
@@ -84,7 +79,7 @@ async def start(ctx):
             return
 
         new_player = {
-            "discord_id": discord_id,
+            "discord_id": str(ctx.author.id),
             "player_name": ctx.author.display_name,
             "crowns": 250,
             "parcels": 1,
@@ -108,11 +103,10 @@ async def start(ctx):
 
     except Exception as error:
         print("START ERROR:", error)
-        await ctx.send("❌ Crownlands had a database problem. Please try again.")
-
+        await ctx.send("❌ Crownlands had a database problem.")
 
 # =========================
-# PROFILE
+# Profile
 # =========================
 
 @bot.command()
@@ -121,10 +115,7 @@ async def profile(ctx):
         player = get_player(ctx.author.id)
 
         if not player:
-            await ctx.send(
-                "You don't have a Crownlands account yet.\n"
-                "Type **!start** first."
-            )
+            await ctx.send("You don't have an account yet. Type **!start** first.")
             return
 
         await ctx.send(
@@ -139,11 +130,10 @@ async def profile(ctx):
 
     except Exception as error:
         print("PROFILE ERROR:", error)
-        await ctx.send("❌ I couldn't read your Crownlands account.")
-
+        await ctx.send("❌ I couldn't read your account.")
 
 # =========================
-# LAND
+# Land
 # =========================
 
 @bot.command()
@@ -166,11 +156,10 @@ async def land(ctx):
 
     except Exception as error:
         print("LAND ERROR:", error)
-        await ctx.send("❌ I couldn't read your land details.")
-
+        await ctx.send("❌ I couldn't read your land.")
 
 # =========================
-# BUILD
+# Build
 # =========================
 
 @bot.command()
@@ -198,17 +187,11 @@ async def build(ctx, building_name=None):
 
         if empty_parcels <= 0:
             await ctx.send(
-                "❌ You have no empty parcels.\n"
-                "You will need more land before building again."
+                "❌ You have no empty parcels available."
             )
             return
 
-        # -------------------------
-        # TIMBER YARD
-        # -------------------------
-
         if building_name == "timberyard":
-
             crown_cost = 50
             timber_cost = 25
             brick_cost = 5
@@ -219,7 +202,7 @@ async def build(ctx, building_name=None):
                 or player["brick"] < brick_cost
             ):
                 await ctx.send(
-                    "❌ You cannot afford a **Timber Yard**.\n\n"
+                    "❌ You cannot afford a Timber Yard.\n\n"
                     "Cost:\n"
                     "👑 50 Crowns\n"
                     "🪵 25 Timber\n"
@@ -238,20 +221,15 @@ async def build(ctx, building_name=None):
             )
 
             await ctx.send(
-                "🪵 **Timber Yard built successfully!**\n\n"
-                "You used one parcel.\n\n"
+                "🪵 **Timber Yard built!**\n\n"
+                "You used 1 parcel.\n\n"
                 "Cost:\n"
                 "👑 50 Crowns\n"
                 "🪵 25 Timber\n"
                 "🧱 5 Brick"
             )
 
-        # -------------------------
-        # QUARRY
-        # -------------------------
-
         elif building_name == "quarry":
-
             crown_cost = 60
             timber_cost = 20
             brick_cost = 5
@@ -262,7 +240,7 @@ async def build(ctx, building_name=None):
                 or player["brick"] < brick_cost
             ):
                 await ctx.send(
-                    "❌ You cannot afford a **Quarry**.\n\n"
+                    "❌ You cannot afford a Quarry.\n\n"
                     "Cost:\n"
                     "👑 60 Crowns\n"
                     "🪵 20 Timber\n"
@@ -281,8 +259,8 @@ async def build(ctx, building_name=None):
             )
 
             await ctx.send(
-                "⛏️ **Quarry built successfully!**\n\n"
-                "You used one parcel.\n\n"
+                "⛏️ **Quarry built!**\n\n"
+                "You used 1 parcel.\n\n"
                 "Cost:\n"
                 "👑 60 Crowns\n"
                 "🪵 20 Timber\n"
@@ -291,40 +269,35 @@ async def build(ctx, building_name=None):
 
         else:
             await ctx.send(
-                "❌ I don't recognise that building.\n\n"
-                "Available buildings:\n"
+                "❌ Unknown building.\n\n"
+                "Try:\n"
                 "`!build timberyard`\n"
                 "`!build quarry`"
             )
 
     except Exception as error:
         print("BUILD ERROR:", error)
-        await ctx.send(
-            "❌ Something went wrong while trying to build.\n"
-            "Check the Render log if this continues."
-        )
-
+        await ctx.send("❌ Something went wrong while building.")
 
 # =========================
-# HELP
+# Help
 # =========================
 
 @bot.command(name="help", aliases=["helpme"])
 async def crownlands_help(ctx):
     await ctx.send(
         "🏰 **CROWNLANDS COMMANDS**\n\n"
-        "👤 `!start` — create your Crownlands account\n"
-        "📋 `!profile` — show your Crowns and resources\n"
-        "🗺️ `!land` — show your parcels\n"
-        "🏗️ `!build` — show available buildings\n"
-        "🪵 `!build timberyard` — build a Timber Yard\n"
-        "⛏️ `!build quarry` — build a Quarry\n"
-        "❓ `!help` — show this command list"
+        "`!start` — create your account\n"
+        "`!profile` — show your resources\n"
+        "`!land` — show your land\n"
+        "`!build` — show available buildings\n"
+        "`!build timberyard` — build a Timber Yard\n"
+        "`!build quarry` — build a Quarry\n"
+        "`!help` — show this list"
     )
 
-
 # =========================
-# Start Crownlands
+# Start bot
 # =========================
 
 bot.run(TOKEN)
